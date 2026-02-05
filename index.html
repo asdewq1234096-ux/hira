@@ -2,20 +2,20 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>ひらがじゃん Online - Final</title>
+    <title>ひらがじゃん Online - Active Players Only</title>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getDatabase, ref, set, onValue, get } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+        import { getDatabase, ref, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // --- Firebase設定（ここに貼り付けてください） ---
+        // --- 【重要】ここを自分のFirebase設定に書き換えてください ---
         const firebaseConfig = {
-            apiKey: "AIzaSyAznd78OehNx1vP73aFRnUqXZlhwuocQmo",
-            authDomain: "hiragajann.firebaseapp.com",
-            databaseURL: "https://hiragajann-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "hiragajann",
-            storageBucket: "hiragajann.firebasestorage.app",
-            messagingSenderId: "749440712131",
-            appId: "1:749440712131:web:325b776154dbefa07c9176"
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            databaseURL: "https://YOUR_PROJECT.firebasedatabase.app",
+            projectId: "YOUR_PROJECT",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "XXXXX",
+            appId: "XXXXX"
         };
 
         const app = initializeApp(firebaseConfig);
@@ -26,14 +26,19 @@
         let currentGameState = null;
         let dragIdx = null;
 
-        // 1. 席を選ぶ
+        // 1. 席を選ぶ（参加）
         window.joinGame = (id) => {
             localPlayerId = parseInt(id);
             document.getElementById('setup').style.display = 'none';
             document.getElementById('game').style.display = 'block';
             document.getElementById('my-id-display').innerText = `あなたの席: Player ${id}`;
             
-            // 初回読み込み
+            // Firebaseに「参加中」であることを記録
+            const updates = {};
+            updates[`players/${id}`] = true;
+            update(gameRef, updates);
+
+            // データの監視開始
             onValue(gameRef, (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
@@ -43,15 +48,21 @@
             });
         };
 
-        // 2. ゲームリセット
+        // 2. ゲーム開始（山札と手牌を配り直す）
         window.initGame = () => {
             const chars = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん";
             const deck = (chars + chars).split("").sort(() => Math.random() - 0.5);
+            
+            // 現在参加しているプレイヤーを取得
+            const players = currentGameState?.players || {};
+            if (localPlayerId !== null) players[localPlayerId] = true;
+
             const newState = {
                 deck: deck,
                 hands: [deck.splice(0,13), deck.splice(0,13), deck.splice(0,13), deck.splice(0,13)],
                 rivers: [[], [], [], []],
-                turn: 0,
+                turn: parseInt(Object.keys(players)[0]), // 参加者のうち最小の番号からスタート
+                players: players,
                 lastDiscard: null
             };
             set(gameRef, newState);
@@ -59,44 +70,48 @@
 
         // 3. 牌を引く
         window.drawTile = () => {
-            if (!currentGameState || currentGameState.turn !== localPlayerId) return alert("あなたの番ではありません");
+            if (!currentGameState || currentGameState.turn !== localPlayerId) return alert("まだあなたの番ではありません");
             if (currentGameState.hands[localPlayerId].length >= 14) return alert("先に捨ててください");
             
-            const data = currentGameState;
-            const tile = data.deck.pop();
-            data.hands[localPlayerId].push(tile);
+            const data = JSON.parse(JSON.stringify(currentGameState));
+            data.hands[localPlayerId].push(data.deck.pop());
             set(gameRef, data);
         };
 
-        // 4. 牌を捨てる（クリックで実行）
+        // 4. 牌を捨てる
         window.discardTile = (idx) => {
             if (!currentGameState || currentGameState.turn !== localPlayerId) return;
             if (currentGameState.hands[localPlayerId].length < 14) return alert("牌を引いてください");
 
-            const data = currentGameState;
+            const data = JSON.parse(JSON.stringify(currentGameState));
             const tile = data.hands[localPlayerId].splice(idx, 1)[0];
             data.rivers[localPlayerId].push(tile);
+            
+            // 【重要】「参加している人」の中から次の人を探す
+            const joinedIds = Object.keys(data.players).map(Number).sort();
+            const currentIndexInJoined = joinedIds.indexOf(localPlayerId);
+            data.turn = joinedIds[(currentIndexInJoined + 1) % joinedIds.length];
+            
             data.lastDiscard = { char: tile, from: localPlayerId };
-            data.turn = (data.turn + 1) % 4; // 次の人へ
             set(gameRef, data);
         };
 
-        // 5. 並び替え（ドラッグ終了時にFirebaseへ保存）
+        // 5. 並び替え
         function moveTile(from, to) {
-            const data = currentGameState;
+            const data = JSON.parse(JSON.stringify(currentGameState));
             const hand = data.hands[localPlayerId];
             const [target] = hand.splice(from, 1);
             hand.splice(to, 0, target);
             set(gameRef, data);
         }
 
-        // 6. 画面描画
+        // 6. 画面描画（参加者のみ表示）
         function renderBoard() {
             const data = currentGameState;
-            document.getElementById('deck-count').innerText = data.deck.length;
+            document.getElementById('deck-count').innerText = data.deck ? data.deck.length : 0;
             document.getElementById('turn-msg').innerText = (data.turn === localPlayerId) ? "★ あなたの番です！" : `Player ${data.turn} の番...`;
 
-            // 手牌の描画
+            // 手牌描画
             const handContainer = document.getElementById('my-hand');
             handContainer.innerHTML = '';
             data.hands[localPlayerId].forEach((tile, i) => {
@@ -104,34 +119,38 @@
                 div.className = 'tile';
                 div.innerText = tile;
                 div.draggable = true;
-                
-                // クリックで捨てる
                 div.onclick = () => discardTile(i);
-                
-                // ドラッグ＆ドロップ設定
                 div.ondragstart = () => { dragIdx = i; };
                 div.ondragover = (e) => e.preventDefault();
                 div.ondrop = () => moveTile(dragIdx, i);
-                
                 handContainer.appendChild(div);
             });
 
-            // 4人分の河を表示
-            for (let i = 0; i < 4; i++) {
-                const riverEl = document.getElementById(`river-${i}`);
-                riverEl.innerHTML = '';
-                // 現在のターンの人の枠を光らせる
-                riverEl.parentElement.style.boxShadow = (data.turn === i) ? "0 0 15px #ffeb3b" : "none";
+            // 参加しているプレイヤーの「河」だけを動的に作成
+            const tableEl = document.getElementById('players-table');
+            tableEl.innerHTML = ''; // 一旦空にする
+
+            // 参加者リストをループ
+            Object.keys(data.players).forEach(pId => {
+                const id = parseInt(pId);
+                const box = document.createElement('div');
+                box.className = 'river-box';
+                // 現在のターンの人を光らせる
+                if (data.turn === id) box.classList.add('active-turn');
                 
-                if (data.rivers[i]) {
-                    data.rivers[i].forEach(t => {
+                box.innerHTML = `<strong>Player ${id}</strong><div class="river-area"></div>`;
+                const riverArea = box.querySelector('.river-area');
+                
+                if (data.rivers[id]) {
+                    data.rivers[id].forEach(t => {
                         const rd = document.createElement('div');
                         rd.className = 'tile river-tile';
                         rd.innerText = t;
-                        riverEl.appendChild(rd);
+                        riverArea.appendChild(rd);
                     });
                 }
-            }
+                tableEl.appendChild(box);
+            });
         }
     </script>
     <style>
@@ -139,60 +158,55 @@
         .tile { 
             width: 42px; height: 58px; background: #fff; color: #222; border-radius: 4px; 
             display: inline-flex; align-items: center; justify-content: center; 
-            font-size: 22px; font-weight: bold; margin: 3px; cursor: grab;
-            box-shadow: 0 4px #999; border: 1px solid #ccc; user-select: none;
+            font-size: 22px; font-weight: bold; margin: 3px; cursor: pointer;
+            box-shadow: 0 4px #999; border: 1px solid #ccc;
         }
-        .tile:active { cursor: grabbing; }
         .river-tile { width: 28px; height: 38px; font-size: 14px; box-shadow: 0 2px #999; cursor: default; }
         
-        /* 麻雀卓レイアウト */
-        .table { 
-            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; 
-            max-width: 800px; margin: 15px auto; background: #00695c; 
-            padding: 15px; border-radius: 15px; border: 10px solid #3e2723;
+        /* 参加者の数に合わせて並ぶエリア */
+        #players-table { 
+            display: flex; flex-wrap: wrap; justify-content: center; gap: 15px;
+            max-width: 900px; margin: 20px auto; 
         }
-        .river-box { background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; min-height: 100px; text-align: left; transition: 0.3s; }
-        
+        .river-box { 
+            background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; 
+            min-width: 180px; min-height: 120px; text-align: left; 
+            border: 2px solid rgba(255,255,255,0.1); 
+        }
+        .active-turn { border: 2px solid #ffeb3b; box-shadow: 0 0 10px #ffeb3b; }
+        .river-area { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+
         #setup { margin-top: 100px; }
-        .btn-large { padding: 15px 30px; font-size: 18px; cursor: pointer; margin: 10px; border-radius: 10px; border: none; font-weight: bold; }
-        .action-btn { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #eee; border: none; border-radius: 5px; margin: 5px; }
-        #turn-msg { font-size: 24px; color: #ffeb3b; font-weight: bold; height: 30px; margin-top: 10px; }
+        .btn-large { padding: 15px 25px; font-size: 18px; cursor: pointer; margin: 10px; border-radius: 10px; }
+        .action-btn { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; border-radius: 5px; border: none; font-weight: bold; }
+        #turn-msg { font-size: 24px; color: #ffeb3b; height: 30px; margin: 10px 0; }
     </style>
 </head>
 <body>
 
     <div id="setup">
         <h1>ひらがじゃん Online</h1>
-        <p>空いている席を選んでください</p>
-        <button class="btn-large" onclick="joinGame(0)">Player 0 (親)</button>
+        <p>席を選んで参加してください</p>
+        <button class="btn-large" onclick="joinGame(0)">Player 0</button>
         <button class="btn-large" onclick="joinGame(1)">Player 1</button>
         <button class="btn-large" onclick="joinGame(2)">Player 2</button>
         <button class="btn-large" onclick="joinGame(3)">Player 3</button>
     </div>
 
     <div id="game" style="display:none;">
-        <div id="my-id-display" style="font-weight: bold; opacity: 0.8;"></div>
+        <div id="my-id-display"></div>
         <div id="turn-msg"></div>
 
         <div>
             山札: <span id="deck-count">--</span> 枚
-            <button class="action-btn" onclick="initGame()" style="background: #ffccbc;">リセット</button>
-            <button class="action-btn" onclick="drawTile()" style="background: #fff; transform: scale(1.1);">牌を引く</button>
+            <button class="action-btn" onclick="initGame()" style="background: #ffccbc;">ゲーム開始</button>
+            <button class="action-btn" onclick="drawTile()" style="background: #fff;">牌を引く</button>
         </div>
 
-        <div class="table">
-            <div class="river-box"><strong>P0 (親)</strong><div id="river-0"></div></div>
-            <div class="river-box"><strong>P1</strong><div id="river-1"></div></div>
-            <div class="river-box"><strong>P2</strong><div id="river-2"></div></div>
-            <div class="river-box"><strong>P3</strong><div id="river-3"></div></div>
-        </div>
+        <div id="players-table"></div>
 
         <h3>あなたの手牌</h3>
-        <div id="my-hand" style="min-height: 70px; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px;"></div>
-        <p style="font-size: 12px; opacity: 0.8;">
-            【操作】自分の番に「牌を引く」→「捨てたい牌をクリック」<br>
-            手牌をドラッグすると並び替えられます
-        </p>
+        <div id="my-hand"></div>
     </div>
 
 </body>
